@@ -132,6 +132,32 @@ export async function disconnect() {
   }
 }
 
+export async function reattach(targetId) {
+  if (client) {
+    try { await client.close(); } catch {}
+    client = null;
+    targetInfo = null;
+  }
+  let lastError;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      client = await CDP({ host: CDP_HOST, port: CDP_PORT, target: targetId });
+      await client.Runtime.enable();
+      await client.Page.enable();
+      await client.DOM.enable();
+      const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
+      const targets = await resp.json();
+      targetInfo = targets.find(t => t.id === targetId) || { id: targetId };
+      return client;
+    } catch (err) {
+      lastError = err;
+      const delay = Math.min(BASE_DELAY * Math.pow(2, attempt), 30000);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error(`CDP reattach to ${targetId} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
+}
+
 // --- Direct API path helpers ---
 // Each returns the STRING expression path after verifying it exists.
 // Callers use the returned string in their own evaluate() calls.
