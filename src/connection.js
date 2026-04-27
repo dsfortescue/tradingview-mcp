@@ -93,6 +93,16 @@ export async function connect() {
       await c.Runtime.enable();
       await c.Page.enable();
       await c.DOM.enable();
+      // Force the chart canvas to keep painting even when this CDP target's
+      // tab is not the foreground tab in TradingView Desktop. Without this,
+      // background tabs report document.visibilityState='hidden', which
+      // pauses requestAnimationFrame and produces blank canvas captures
+      // (HTML overlays render, but candles/SMA/axis are empty pixels).
+      // Verified 2026-04-27: a captured daily chart on a hidden tab is
+      // 146KB blank vs 261KB chart-rendered after this call.
+      // Wrapped — the Emulation domain may be unavailable on some Chromium
+      // builds; we never want to refuse a CDP attach over an optional hint.
+      try { await c.Emulation.setFocusEmulationEnabled({ enabled: true }); } catch {}
 
       // Commit: publish to module-scoped singletons only after the
       // attach + domain enables fully succeeded.
@@ -181,6 +191,11 @@ export async function reattach(targetId) {
       await c.Runtime.enable();
       await c.Page.enable();
       await c.DOM.enable();
+      // Re-apply per-target focus emulation after every CDP reattach. The
+      // setting is per-target (not per-host), so a tab_switch that lands on
+      // a different chart needs its own setFocusEmulationEnabled call. See
+      // connect() for the full rationale.
+      try { await c.Emulation.setFocusEmulationEnabled({ enabled: true }); } catch {}
       const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
       const targets = await resp.json();
 
