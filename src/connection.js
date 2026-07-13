@@ -11,6 +11,7 @@ const CDP_HOST = 'localhost';
 const CDP_PORT = 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
+const READ_CHART_ID = (process.env.TV_READ_CHART_ID || '').trim() || 'uq4tQHRC';
 
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
@@ -127,10 +128,26 @@ export async function connect() {
 async function findChartTarget() {
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
-  // Prefer targets with tradingview.com/chart in the URL
-  return targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
-    || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url))
-    || null;
+  const readChartPattern = new RegExp(`/chart/${READ_CHART_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[/?#]|$)`, 'i');
+  const readChartTarget = targets.find(t => t.type === 'page' && readChartPattern.test(t.url));
+  if (readChartTarget) return readChartTarget;
+  // Fail CLOSED when the read chart is absent (Seth review 2026-07-13).
+  // Attaching to an arbitrary chart target is exactly the hazard this
+  // selection rule exists to prevent: the agent toolset writes symbols
+  // (chart_set_symbol), and a wrong-chart attach can silently corrupt a
+  // live Pine alert-emission chart. A hard-fail is visible and
+  // recoverable; a fallback attach is silent and financial. Explicit
+  // opt-in to the old permissive behaviour via TV_ALLOW_CHART_FALLBACK=1.
+  if (process.env.TV_ALLOW_CHART_FALLBACK === '1') {
+    const fallbackTarget = targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
+      || null;
+    if (fallbackTarget) {
+      console.error(`tradingview-mcp: read chart ${READ_CHART_ID} not found in CDP targets — TV_ALLOW_CHART_FALLBACK=1, attaching first chart target ${fallbackTarget.url}`);
+    }
+    return fallbackTarget;
+  }
+  console.error(`tradingview-mcp: read chart ${READ_CHART_ID} not found in CDP targets — refusing to attach (fail-closed; set TV_ALLOW_CHART_FALLBACK=1 to override)`);
+  return null;
 }
 
 export async function getTargetInfo() {
